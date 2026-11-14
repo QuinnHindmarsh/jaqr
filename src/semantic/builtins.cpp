@@ -1,11 +1,29 @@
 #include "builtins.h"
 
+#include <format>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <unordered_set>
+#include <utility>
+#include <variant>
+#include <vector>
+
+builtin_error::builtin_error(std::string code, source_span span, std::string detail)
+    : std::invalid_argument(std::format("{}:{}-{}:{}: {}: {}", span.start_line, span.start_col,
+                                        span.end_line, span.end_col, code, detail)),
+      code(std::move(code)), span(span), detail(std::move(detail)) {
+}
 
 namespace {
+template <class... Handlers> struct overloaded : Handlers... {
+    using Handlers::operator()...;
+};
+template <class... Handlers> overloaded(Handlers...) -> overloaded<Handlers...>;
+
+// A dependent false, so a static_assert fires only when its template is instantiated.
+template <class> constexpr bool unhandled_alternative = false;
+
 struct value_info {
     const type_syntax *type = nullptr;
     bool string = false;
@@ -19,6 +37,11 @@ struct symbol {
     std::optional<builtin_function> builtin;
 };
 
+// TODO: value_info is a second, weaker type inference over type_syntax beside the
+// checker's value_type in semantic.cpp (it ignores array lengths and most operand rules,
+// and does not see through every expression). It is enough for choosing which stream
+// overload to call, but the two can disagree. Once analysis_root can carry per-expression
+// types, this resolver could consume the checker's types instead of inferring its own.
 class resolver {
     const primitive_type_syntax int_type{primitive_type::INT};
     const primitive_type_syntax float_type{primitive_type::FLOAT};
@@ -33,7 +56,9 @@ class resolver {
     builtin_calls calls;
     std::unordered_map<const function_decl *, std::unordered_set<const function_decl *>> edges;
     std::unordered_set<const function_decl *> io_functions;
-    std::unordered_set<const function_decl *> restricted_calls;
+    // Calls made from steps, update functions and invariants, in source order, so an I/O
+    // effect reached through a callee is reported at the first offending call.
+    std::vector<std::pair<const function_decl *, const postfix_expr *>> restricted_calls;
     const function_decl *current_function = nullptr;
     const type_syntax *receiver = nullptr;
     bool restricted = false;
@@ -49,9 +74,8 @@ class resolver {
         return type && (type->type == primitive_type::INT || type->type == primitive_type::FLOAT ||
                         type->type == primitive_type::CHAR || type->type == primitive_type::BOOL);
     }
-    static void fail(const expr &node, const std::string &message) {
-        throw std::invalid_argument("I/O at line " + std::to_string(node.source.start_line) + ": " +
-                                    message);
+    [[noreturn]] static void fail(const char *code, const expr &node, const std::string &message) {
+        throw builtin_error(code, node.source, message);
     }
     static bool comparison(binary_op op) {
         return op == binary_op::EQUALS || op == binary_op::NOT_EQUALS || op == binary_op::GT ||
@@ -66,22 +90,19 @@ class resolver {
             return binding ? binding->value : value_info{};
         }
         if (const auto *value = dynamic_cast<const literal *>(node)) {
-            switch (value->value.index()) {
-            case 0:
-                return {&int_type};
-            case 1:
-                return {&byte_type};
-            case 2:
-                return {nullptr, true};
-            case 3:
-                return {&float_type};
-            case 4:
-                return {&char_type};
-            case 5:
-                return {&bool_type};
-            default:
-                return {};
-            }
+            // The catch-all template makes a new literal kind a compile error here.
+            return std::visit(
+                overloaded{[&](std::int32_t) { return value_info{.type = &int_type}; },
+                           [&](std::byte) { return value_info{.type = &byte_type}; },
+                           [](const std::string &) { return value_info{.string = true}; },
+                           [&](double) { return value_info{.type = &float_type}; },
+                           [&](char) { return value_info{.type = &char_type}; },
+                           [&](bool) { return value_info{.type = &bool_type}; },
+                           [](const auto &unhandled) {
+                               static_assert(unhandled_alternative<decltype(unhandled)>,
+                                             "every literal kind needs a type");
+                           }},
+                value->value);
         }
         if (const auto *binary = dynamic_cast<const binary_expr *>(node)) {
             const auto left = expression(binary->left.get());
@@ -187,23 +208,29 @@ class resolver {
         if (const auto *name = dynamic_cast<const identifier *>(node.obj.get()))
             callee = lookup(name->lexeme);
         if (callee && callee->builtin) {
+            // Codes follow the checker's equivalent rule for an ordinary call or assignment.
             if (node.op != postfix_op::FUNCT_CALL)
-                fail(node, "print and scan require ordinary call syntax");
+                fail("SEM018", node, "print and scan require ordinary call syntax");
             const bool scanning = *callee->builtin == builtin_function::scan;
             const std::string name = scanning ? "scan" : "print";
             if (arguments.size() != 1)
-                fail(node, name + " requires exactly one argument");
+                fail("SEM006", node, name + " requires exactly one argument");
             if (restricted)
-                fail(node, "SEM021: " + name +
-                               " is not allowed in a step, update function or invariant");
+                fail("SEM021", node,
+                     name + " is not allowed in a step, update function or invariant");
             if (scanning) {
+                // scan assigns to its argument, so it needs storage like an assignment target.
                 const auto &argument = arguments.front();
-                if (!argument.lvalue || !argument.writable || argument.state)
-                    fail(node, "scan requires writable, non-state storage");
+                if (!argument.lvalue)
+                    fail("SEM004", node, "scan requires writable storage, not a computed value");
+                if (!argument.writable)
+                    fail("SEM012", node, "scan requires writable storage, not immutable storage");
+                if (argument.state)
+                    fail("SEM017", node, "scan requires non-state storage");
                 if (!stream_scalar(argument))
-                    fail(node, "scan supports int, float, char and bool");
+                    fail("SEM003", node, "scan supports int, float, char and bool");
             } else if (!stream_scalar(arguments.front()) && !arguments.front().string)
-                fail(node, "print supports int, float, char, bool and string literals");
+                fail("SEM003", node, "print supports int, float, char, bool and string literals");
             calls.emplace(&node, *callee->builtin);
             if (current_function)
                 io_functions.insert(current_function);
@@ -225,7 +252,7 @@ class resolver {
             if (current_function)
                 edges[current_function].insert(function);
             if (restricted)
-                restricted_calls.insert(function);
+                restricted_calls.emplace_back(function, &node);
             return {function->return_type ? function->return_type.get() : &void_type};
         }
         return {};
@@ -350,10 +377,12 @@ class resolver {
                     if (io_functions.contains(callee))
                         changed |= io_functions.insert(caller).second;
         } while (changed);
-        for (const auto *function : restricted_calls)
+        for (const auto &[function, call] : restricted_calls)
             if (io_functions.contains(function))
-                throw std::invalid_argument("SEM021: I/O is not allowed here through function " +
-                                            function->name->lexeme);
+                fail("SEM021", *call,
+                     "I/O is not allowed in a step, update function or invariant, including "
+                     "through function '" +
+                         function->name->lexeme + "'");
         return std::move(calls);
     }
 };

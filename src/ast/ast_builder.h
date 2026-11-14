@@ -1,6 +1,5 @@
 #pragma once
 
-#include "ast_root.h"
 #include "declaration.h"
 #include "expression.h"
 #include "expression_base.h"
@@ -15,9 +14,6 @@
 
 // Builders centralise node construction and source-span attachment, leaving the parser
 // to describe grammar rules and transfer ownership of their children.
-
-// ---- Root ----
-ast_root_ptr make_ast_root(std::vector<decl_ptr> decls = {});
 
 // ---- Expressions ----
 

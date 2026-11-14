@@ -1,6 +1,5 @@
 #include "parser.h"
 #include "../ast/ast_builder.h"
-#include "../ast/ast_root.h"
 #include "../ast/declaration.h"
 #include "../ast/expression.h"
 #include "../ast/expression_base.h"
@@ -34,7 +33,7 @@ class Parser {
     }
 
     // builds the AST of the whole program. throws std::runtime_error on a syntax error
-    ast_root_ptr parse() {
+    program_ptr parse() {
         return parse_program();
     }
 
@@ -59,6 +58,11 @@ class Parser {
     // error reporting
     // ---------------------------------------------------------------------------------------
 
+    // TODO: syntax errors only name the token found. Report what was expected as well (expect()
+    // knows the token type) and use the shared diagnostic type once one exists: positions here
+    // are zero-based and carry no filename, unlike semantic_error.
+    // TODO: the parser stops at the first error. Synchronising on ";" or "}" would let it report
+    // several syntax errors in one run.
     [[noreturn]] static void report_unexpected_token(const token &errored_token) {
         throw std::runtime_error(std::format("SYN001: unexpected token '{}' at line {}, column {}",
                                              errored_token.lexeme, errored_token.line,
@@ -203,6 +207,10 @@ class Parser {
     }
 
     // consumes the current token, errors if it is not a binary operator. returns the operator
+    // TODO: this switch, and the per-precedence-level parse_*_expression functions below, repeat
+    // the operator table by hand. A single {token_type, binary_op, precedence, associativity} table
+    // driving a precedence-climbing loop would replace about a dozen near-identical functions and
+    // make adding an operator (%, compound assignment) a one-line change.
     binary_op expect_binary_operator() {
         binary_op op{};
         switch (peek().type) {
@@ -272,6 +280,9 @@ class Parser {
 
     // x<-1 tokenises as IDENTIFIER DEREFERENCE INT_LITERAL, but means x < -1.
     // called when the current token is <- directly after an operand, where it must mean < then -
+    // TODO: this token-splitting workaround exists because "<-" is lexed as one token. Deciding
+    // between dereference and "< -" in the tokeniser is not possible without context, so consider
+    // a different dereference spelling if the ambiguity keeps costing parser complexity.
     void split_dereference() {
         const token &dereference = current();
         token minus{token_type::MINUS, "-", dereference.line, dereference.column + 1};
@@ -298,6 +309,8 @@ class Parser {
     }
 
     // the value of a float literal: 1.5, .5 or 1.
+    // TODO: std::stod depends on the global C locale and throws std::invalid_argument on malformed
+    // input, which is not caught here. std::from_chars for double avoids both.
     static double float_value(const token &literal_token) {
         double value = 0;
 
@@ -343,8 +356,8 @@ class Parser {
     // ---------------------------------------------------------------------------------------
 
     // program = { topLevelDeclaration } EOF ;
-    ast_root_ptr parse_program() {
-        ast_root_ptr root = make_ast_root();
+    program_ptr parse_program() {
+        program_ptr root = make_program();
         while (!at_end()) {
             root->declarations.push_back(parse_top_level_declaration());
         }
@@ -1241,7 +1254,7 @@ class Parser {
     }
 };
 
-ast_root_ptr parse(const std::vector<token> &tokens) {
+program_ptr parse(const std::vector<token> &tokens) {
     Parser p(tokens);
     return p.parse();
 }

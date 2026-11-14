@@ -45,6 +45,8 @@ struct variable_decl : decl {
 
 using variable_decl_ptr = std::unique_ptr<variable_decl>;
 
+// TODO: parameter and field_decl carry no source_span, so semantic analysis has to report a
+// duplicate or badly typed parameter/field at the whole enclosing declaration.
 struct parameter {
     std::string name;
     type_ptr declared_type;
@@ -122,6 +124,8 @@ struct invariant_decl : decl {
 
     // Filled by semantic analysis from the condition's referenced state declarations.
     // Borrowed node identities distinguish dependencies without duplicating AST ownership.
+    // TODO: this is analysis output stored on a syntax node, which forces a const_cast in
+    // semantic.cpp. Move it to a side table in analysis_root keyed by the invariant.
     std::vector<const variable_decl *> state_vars;
     expr_ptr condition;
 

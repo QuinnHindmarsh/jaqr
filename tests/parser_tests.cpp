@@ -1,6 +1,5 @@
 #include "../src/parser/parser.h"
 
-#include "../src/ast/ast_root.h"
 #include "../src/ast/declaration.h"
 #include "../src/ast/expression.h"
 #include "../src/ast/expression_base.h"
@@ -286,11 +285,11 @@ const expr &only_expression(const program &root) {
     return *as<expr_stmt>(only_statement(root)).expression;
 }
 
-ast_root_ptr parse_statement_tokens(const std::vector<token> &statement) {
+program_ptr parse_statement_tokens(const std::vector<token> &statement) {
     return parse(on_one_line(in_main(statement)));
 }
 
-ast_root_ptr parse_expression_tokens(const std::vector<token> &expression) {
+program_ptr parse_expression_tokens(const std::vector<token> &expression) {
     return parse_statement_tokens(as_statement(expression));
 }
 
@@ -313,13 +312,13 @@ std::string type_dump(const std::vector<token> &type) {
     std::vector<token> tokens = {tok(DEFINE), tok(LET), ident("x"), tok(COLON)};
     tokens.insert(tokens.end(), type.begin(), type.end());
     tokens.push_back(tok(SEMI_COLON));
-    const ast_root_ptr root = parse(on_one_line(tokens));
+    const program_ptr root = parse(on_one_line(tokens));
     return dump(*as<variable_decl>(*root->declarations.at(0)).declared_type);
 }
 
 // the value the parser gives a literal token, or nullopt if it is of another type
 template <typename value_type> std::optional<value_type> literal_value(const token &literal_token) {
-    const ast_root_ptr root = parse_expression_tokens({literal_token});
+    const program_ptr root = parse_expression_tokens({literal_token});
     const literal &node = as<literal>(only_expression(*root));
     if (!std::holds_alternative<value_type>(node.value)) {
         return std::nullopt;
@@ -341,7 +340,7 @@ constexpr std::string_view end_of_input_message = "SYN001: unexpected end of inp
 // the message of the syntax error the tokens cause
 std::string parse_error(const std::vector<token> &placed_tokens) {
     try {
-        const ast_root_ptr root = parse(placed_tokens);
+        const program_ptr root = parse(placed_tokens);
         return "<no error, parsed as " + dump(*root) + ">";
     } catch (const std::runtime_error &error) {
         return error.what();
@@ -549,7 +548,7 @@ TEST(ParserGlobalVariable, ImutState) {
 }
 
 TEST(ParserGlobalVariable, StorageAndMutabilityAreRecorded) {
-    const ast_root_ptr root = parse(on_one_line({
+    const program_ptr root = parse(on_one_line({
         tok(DEFINE),
         tok(LET),
         ident("a"),
@@ -824,7 +823,7 @@ TEST(ParserFunction, ManyParametersAndCompoundTypes) {
 }
 
 TEST(ParserFunction, OrdinaryFunctionRecordsKindAndReturnType) {
-    const ast_root_ptr root = parse(on_one_line(
+    const program_ptr root = parse(on_one_line(
         {tok(FN), ident("f"), tok(PARENTHESES_OPEN), ident("a"), tok(COLON), tok(INT),
          tok(PARENTHESES_CLOSE), tok(COLON), tok(INT), tok(CURLY_OPEN), tok(CURLY_CLOSE)}));
     const function_decl &function = as<function_decl>(*root->declarations.at(0));
@@ -906,7 +905,7 @@ TEST(ParserUpdateFunction, FirstClauseIsStateSecondIsOrdinary) {
         tok(CURLY_OPEN),
         tok(CURLY_CLOSE),
     });
-    const ast_root_ptr root = parse(tokens);
+    const program_ptr root = parse(tokens);
     EXPECT_EQ(dump(*root), "(program (update-fn tick ((c Counter)) ((n int) (m int)) (block)))");
 
     const function_decl &function = as<function_decl>(*root->declarations.at(0));
@@ -1024,7 +1023,7 @@ TEST(ParserImpl, NoMethods) {
 
 TEST(ParserImpl, MethodsAndUpdateMethods) {
     // impl P { fn get ( ) : int { return this . x ; } update fn set ( v : int ) { } } ;
-    const ast_root_ptr root = parse(on_one_line({
+    const program_ptr root = parse(on_one_line({
         tok(IMPL),
         ident("P"),
         tok(CURLY_OPEN),
@@ -1255,7 +1254,7 @@ TEST(ParserLocalVariable, ImutState) {
 }
 
 TEST(ParserLocalVariable, IsADeclarationStatement) {
-    const ast_root_ptr root =
+    const program_ptr root =
         parse_statement_tokens({tok(LET), ident("x"), tok(COLON), tok(INT), tok(SEMI_COLON)});
     const decl_stmt &statement = as<decl_stmt>(only_statement(*root));
     const variable_decl &declaration = as<variable_decl>(*statement.declaration);
@@ -1312,7 +1311,7 @@ TEST(ParserExpressionStatement, EmptyStatementIsNotInTheGrammar) {
 }
 
 TEST(ParserReturn, WithoutValue) {
-    const ast_root_ptr root = parse_statement_tokens({tok(RETURN), tok(SEMI_COLON)});
+    const program_ptr root = parse_statement_tokens({tok(RETURN), tok(SEMI_COLON)});
     EXPECT_EQ(dump(only_statement(*root)), "(return)");
     EXPECT_EQ(as<return_stmt>(only_statement(*root)).value, nullptr);
 }
@@ -1332,7 +1331,7 @@ TEST(ParserReturn, MissingSemiColon) {
 // ---------------------------------------------------------------------------------------------
 
 TEST(ParserIf, IfOnly) {
-    const ast_root_ptr root =
+    const program_ptr root =
         parse_statement_tokens({tok(IF), tok(PARENTHESES_OPEN), ident("x"), tok(PARENTHESES_CLOSE),
                                 tok(CURLY_OPEN), tok(CURLY_CLOSE)});
     EXPECT_EQ(dump(only_statement(*root)), "(if (x (block)))");
@@ -1532,7 +1531,7 @@ TEST(ParserFor, NeedsParenthesesAndBlock) {
 // ---------------------------------------------------------------------------------------------
 
 TEST(ParserStep, WithoutReject) {
-    const ast_root_ptr root =
+    const program_ptr root =
         parse_statement_tokens({tok(STEP), tok(CURLY_OPEN), tok(CURLY_CLOSE)});
     EXPECT_EQ(dump(only_statement(*root)), "(step (block))");
     EXPECT_EQ(as<step_stmt>(only_statement(*root)).reject_body, nullptr);
@@ -1562,7 +1561,7 @@ TEST(ParserStep, Errors) {
 }
 
 TEST(ParserInvariant, Local) {
-    const ast_root_ptr root =
+    const program_ptr root =
         parse_statement_tokens({tok(INV), tok(CURLY_OPEN), ident("x"), tok(GREATER_OR_EQUAL),
                                 int_lit("0"), tok(CURLY_CLOSE), tok(SEMI_COLON)});
     EXPECT_EQ(dump(only_statement(*root)), "(inv (>= x int:0))");
@@ -2170,7 +2169,7 @@ TEST(ParserPostfix, MethodCallIsAnOrdinaryCall) {
 
 TEST(ParserPostfix, TwoClausesAreOneUpdateCall) {
     // f ( s , t ) ( x , y , z )
-    const ast_root_ptr root = parse_expression_tokens(
+    const program_ptr root = parse_expression_tokens(
         {ident("f"), tok(PARENTHESES_OPEN), ident("s"), tok(COMMA), ident("t"),
          tok(PARENTHESES_CLOSE), tok(PARENTHESES_OPEN), ident("x"), tok(COMMA), ident("y"),
          tok(COMMA), ident("z"), tok(PARENTHESES_CLOSE)});
@@ -2197,7 +2196,7 @@ TEST(ParserPostfix, UpdateCallClausesMayBeEmpty) {
 }
 
 TEST(ParserPostfix, OneClauseIsAnOrdinaryCall) {
-    const ast_root_ptr root = parse_expression_tokens(
+    const program_ptr root = parse_expression_tokens(
         {ident("f"), tok(PARENTHESES_OPEN), ident("s"), tok(PARENTHESES_CLOSE)});
     EXPECT_EQ(as<postfix_expr>(only_expression(*root)).op, postfix_op::FUNCT_CALL);
 }
@@ -2801,7 +2800,7 @@ TEST(ParserError, StrayTokenAfterAValidDeclaration) {
 TEST(ParserError, MessagesAreRuntimeErrorsStartingWithParserError) {
     const std::vector<token> tokens = on_one_line({tok(SEMI_COLON)});
     try {
-        const ast_root_ptr root = parse(tokens);
+        const program_ptr root = parse(tokens);
         FAIL() << "parsed as " << dump(*root);
     } catch (const std::runtime_error &error) {
         EXPECT_TRUE(std::string_view(error.what()).starts_with("SYN001:")) << error.what();
@@ -3222,7 +3221,7 @@ TEST(ParserSpan, FunctionBlockStatementAndBinaryExpression) {
     // fn add(a: int): int {
     //     return a + bb;
     // }
-    const ast_root_ptr root = parse({
+    const program_ptr root = parse({
         at(tok(FN), 0, 0),
         at(ident("add"), 0, 3),
         at(tok(PARENTHESES_OPEN), 0, 6),
@@ -3261,7 +3260,7 @@ TEST(ParserSpan, MultiLineStringLiteralEndsOnItsLastLine) {
     //     s = "ab
     // cd";
     // }
-    const ast_root_ptr root = parse({
+    const program_ptr root = parse({
         at(tok(FN), 0, 0),
         at(ident("main"), 0, 3),
         at(tok(PARENTHESES_OPEN), 0, 7),
@@ -3282,7 +3281,7 @@ TEST(ParserSpan, MultiLineStringLiteralEndsOnItsLastLine) {
 
 TEST(ParserSpan, StringLiteralEndingInANewlineEndsAtColumnOneOfTheNextLine) {
     // the lexeme is: quote, a, newline, quote
-    const ast_root_ptr root = parse({
+    const program_ptr root = parse({
         at(tok(FN), 0, 0),
         at(ident("main"), 0, 3),
         at(tok(PARENTHESES_OPEN), 0, 7),
@@ -3298,7 +3297,7 @@ TEST(ParserSpan, StringLiteralEndingInANewlineEndsAtColumnOneOfTheNextLine) {
 // the span of a global runs from "define" to its ";"
 TEST(ParserSpan, GlobalVariableCoversDefineThroughSemiColon) {
     // define let x: int = 1;   starting at line 2, column 4
-    const ast_root_ptr root = parse({
+    const program_ptr root = parse({
         at(tok(DEFINE), 2, 4),
         at(tok(LET), 2, 11),
         at(ident("x"), 2, 15),
@@ -3318,7 +3317,7 @@ TEST(ParserSpan, GlobalVariableCoversDefineThroughSemiColon) {
 // for a local, the ";" belongs to the statement and not to the declaration
 TEST(ParserSpan, LocalVariableStatementTakesTheSemiColon) {
     // fn main() { let x: [3]->int; }
-    const ast_root_ptr root = parse({
+    const program_ptr root = parse({
         at(tok(FN), 0, 0),
         at(ident("main"), 0, 3),
         at(tok(PARENTHESES_OPEN), 0, 7),
@@ -3349,7 +3348,7 @@ TEST(ParserSpan, LocalVariableStatementTakesTheSemiColon) {
 
 // main's void return type is not written, parser.cpp gives it the span of "main()"
 TEST(ParserSpan, MainSignature) {
-    const ast_root_ptr root = parse({
+    const program_ptr root = parse({
         at(tok(FN), 1, 0),
         at(ident("main"), 1, 3),
         at(tok(PARENTHESES_OPEN), 1, 7),
@@ -3369,7 +3368,7 @@ TEST(ParserSpan, SplitDereferenceGivesTheMinusItsOwnColumn) {
     // fn main() {
     //     x<-1;
     // }
-    const ast_root_ptr root = parse({
+    const program_ptr root = parse({
         at(tok(FN), 0, 0),
         at(ident("main"), 0, 3),
         at(tok(PARENTHESES_OPEN), 0, 7),
@@ -3392,7 +3391,7 @@ TEST(ParserSpan, SplitDereferenceGivesTheMinusItsOwnColumn) {
 
 TEST(ParserSpan, PostfixRunsFromTheObjectToTheEndOfTheSuffix) {
     // fn main() { p.x[10](a)(b); }
-    const ast_root_ptr root = parse({
+    const program_ptr root = parse({
         at(tok(FN), 0, 0),
         at(ident("main"), 0, 3),
         at(tok(PARENTHESES_OPEN), 0, 7),
@@ -3424,7 +3423,7 @@ TEST(ParserSpan, PostfixRunsFromTheObjectToTheEndOfTheSuffix) {
 
 TEST(ParserSpan, PrefixOperatorStartsAtTheOperator) {
     // fn main() { -<-p; }
-    const ast_root_ptr root = parse({
+    const program_ptr root = parse({
         at(tok(FN), 0, 0),
         at(ident("main"), 0, 3),
         at(tok(PARENTHESES_OPEN), 0, 7),
@@ -3445,7 +3444,7 @@ TEST(ParserSpan, PrefixOperatorStartsAtTheOperator) {
 // the grammar files say nothing about spans, so this pins the documented behaviour
 TEST(ParserSpan, ParenthesesAreNotPartOfTheSpan) {
     // fn main() { (a + b); }
-    const ast_root_ptr root = parse({
+    const program_ptr root = parse({
         at(tok(FN), 0, 0),
         at(ident("main"), 0, 3),
         at(tok(PARENTHESES_OPEN), 0, 7),
@@ -3467,7 +3466,7 @@ TEST(ParserSpan, ParenthesesAreNotPartOfTheSpan) {
 
 TEST(ParserSpan, TriviaIsNotPartOfASpan) {
     // "  # c\n  inv { x }  ;  " with the trivia as tokens
-    const ast_root_ptr root = parse({
+    const program_ptr root = parse({
         at(whitespace("  "), 0, 0),
         at(comment("# c"), 0, 2),
         at(whitespace("\n  "), 0, 5),

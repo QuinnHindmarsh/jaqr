@@ -1,8 +1,10 @@
 #include "dfa.h"
 
 #include <initializer_list>
+#include <optional>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -36,19 +38,9 @@ constexpr auto is_whitespace = one_of(" \t\n\r");
 // the char after a backslash in a char or string literal: \n \r \t \0 \\ \' \"
 constexpr auto is_escape_char = one_of("nrt0\\'\"");
 
-// ---- edge list builder ----
-// graph_node owns its edges through unique_ptr, which can't be copied out of a brace list,
-// so each edge is copied into its own allocation here.
-std::vector<std::unique_ptr<edge>> edges(std::initializer_list<edge> list) {
-    std::vector<std::unique_ptr<edge>> result;
-    result.reserve(list.size());
-    for (const edge &e : list) {
-        result.push_back(std::make_unique<edge>(e));
-    }
-    return result;
-}
-
-// Nodes are defined before anything that points to them.
+// Each node is declared before the nodes whose edges point to it, because a name must be
+// declared before use. Edges only take the target's address, so a node may point to itself
+// (e.g. identifier) and string_body is forward declared for its cycle with string_escape.
 
 // The graph is built at startup. Building it only throws if allocation fails, which can't be
 // recovered from, so the check is turned off for the whole graph.
@@ -58,9 +50,9 @@ std::vector<std::unique_ptr<edge>> edges(std::initializer_list<edge> list) {
 
 const graph_node identifier{
     token_type::IDENTIFIER,
-    edges({
+    {
         {is_identifier_char, &identifier},
-    }),
+    },
 };
 
 // ---- keywords ----
@@ -69,17 +61,17 @@ const graph_node identifier{
 // A complete keyword. Further identifier characters fall back to the identifier state,
 // so a name such as "integer" is not split into the keyword "int" and a suffix.
 graph_node keyword(token_type type) {
-    return {type, edges({{is_identifier_char, &identifier}})};
+    return {type, {{is_identifier_char, &identifier}}};
 }
 
 // A partial keyword: an identifier that can continue into one or more keywords.
 graph_node prefix(std::initializer_list<std::pair<char, const graph_node *>> next) {
-    graph_node node{token_type::IDENTIFIER, {}};
+    std::vector<edge> edges;
     for (const auto &[ch, to] : next) {
-        node.edges.push_back(std::make_unique<edge>(edge{is(ch), to}));
+        edges.push_back({is(ch), to});
     }
-    node.edges.push_back(std::make_unique<edge>(edge{is_identifier_char, &identifier}));
-    return node;
+    edges.push_back({is_identifier_char, &identifier});
+    return {token_type::IDENTIFIER, edges};
 }
 
 // bool, byte
@@ -216,89 +208,77 @@ const graph_node kw_prefix_w = prefix({{'h', &kw_prefix_wh}});
 const graph_node reject{std::nullopt, {}};
 
 // ---- numbers ----
-// A digit or letter straight after a number is an error (123abc, 17b, 2b102, 16bfg).
-// The exception is right after the '.', so 5.foo is FLOAT_LITERAL '5.' then IDENTIFIER 'foo'.
+// An identifier char that can't continue the number is an error, not the start of the next token
+// (123abc, 17b, 2b102, 16bfg, 1.5x). The exception is straight after the '.', so 5.foo is
+// FLOAT_LITERAL '5.' then IDENTIFIER 'foo'.
 
 // 16bff14
 const graph_node hexadecimal{
     token_type::BASE_16_LITERAL,
-    edges({
+    {
         {is_hexadecimal_digit, &hexadecimal},
         {is_identifier_char, &reject},
-    }),
+    },
 };
-const graph_node hexadecimal_prefix{std::nullopt,
-                                    edges({{is_hexadecimal_digit, &hexadecimal}})}; // 16b
+const graph_node hexadecimal_prefix{std::nullopt, {{is_hexadecimal_digit, &hexadecimal}}}; // 16b
 
 // 2b100
 const graph_node binary{
     token_type::BASE_2_LITERAL,
-    edges({
+    {
         {is_binary_digit, &binary},
         {is_identifier_char, &reject},
-    }),
+    },
 };
-const graph_node binary_prefix{std::nullopt, edges({{is_binary_digit, &binary}})}; // 2b
+const graph_node binary_prefix{std::nullopt, {{is_binary_digit, &binary}}}; // 2b
 
 // 1.5 .5 (a second '.' is an error: 1.2.3)
 const graph_node float_fraction{
     token_type::FLOAT_LITERAL,
-    edges({
+    {
         {is_digit, &float_fraction},
         {is_identifier_char, &reject},
         {is('.'), &reject},
-    }),
+    },
 };
 // 1. (no edge for letters, so 5.foo ends the float at the '.')
 const graph_node float_dot{
     token_type::FLOAT_LITERAL,
-    edges({
+    {
         {is_digit, &float_fraction},
         {is('.'), &reject},
-    }),
+    },
 };
 
 // '.' then a digit is a float: .5
-const graph_node access{token_type::ACCESS, edges({{is_digit, &float_fraction}})};
+const graph_node access{token_type::ACCESS, {{is_digit, &float_fraction}}};
 
 const graph_node integer{
     token_type::INT_LITERAL,
-    edges({
+    {
         {is_digit, &integer},
         {is('.'), &float_dot},
         {is_identifier_char, &reject},
-    }),
+    },
 };
 
-const graph_node sixteen{
-    token_type::INT_LITERAL,
-    edges({
-        {is('b'), &hexadecimal_prefix},
-        {is_digit, &integer},
-        {is('.'), &float_dot},
-        {is_identifier_char, &reject},
-    }),
-};
+// An integer that can also continue into a base prefix: 1 (to 16), 16 (to 16b) and 2 (to 2b).
+// The extra edge comes first so it takes priority over the ordinary integer edges.
+graph_node integer_or(const edge &towards_prefix) {
+    return {
+        token_type::INT_LITERAL,
+        {
+            towards_prefix,
+            {is_digit, &integer},
+            {is('.'), &float_dot},
+            {is_identifier_char, &reject},
+        },
+    };
+}
 
-const graph_node one{
-    token_type::INT_LITERAL,
-    edges({
-        {is('6'), &sixteen},
-        {is_digit, &integer},
-        {is('.'), &float_dot},
-        {is_identifier_char, &reject},
-    }),
-};
-
-const graph_node two{
-    token_type::INT_LITERAL,
-    edges({
-        {is('b'), &binary_prefix},
-        {is_digit, &integer},
-        {is('.'), &float_dot},
-        {is_identifier_char, &reject},
-    }),
-};
+const graph_node sixteen = integer_or({is('b'), &hexadecimal_prefix});
+const graph_node one = integer_or({is('6'), &sixteen});
+const graph_node two = integer_or({is('b'), &binary_prefix});
 
 // ---- char and string literals ----
 // A backslash moves to an escape node, which accepts one escape char and goes back to the body.
@@ -306,34 +286,35 @@ const graph_node two{
 
 // exactly one char or one escape between the quotes: 'a' '\n' '\''
 const graph_node char_close{token_type::CHAR_LITERAL, {}};
-const graph_node char_body{std::nullopt, edges({{is('\''), &char_close}})};
-const graph_node char_escape{std::nullopt, edges({{is_escape_char, &char_body}})};
+const graph_node char_body{std::nullopt, {{is('\''), &char_close}}};
+const graph_node char_escape{std::nullopt, {{is_escape_char, &char_body}}};
 const graph_node char_open{
     std::nullopt,
-    edges({
+    {
         {is('\\'), &char_escape},
         // '' and ''' are errors
         {none_of("'\n"), &char_body},
-    }),
+    },
 };
 
-// string_body and string_escape point at each other, so one needs declaring first
+// string_body and string_escape point at each other, so one needs declaring first.
+// A string may span lines: only an unescaped '"' ends it.
 const graph_node string_close{token_type::STRING_LITERAL, {}};
 extern const graph_node string_body;
-const graph_node string_escape{std::nullopt, edges({{is_escape_char, &string_body}})};
+const graph_node string_escape{std::nullopt, {{is_escape_char, &string_body}}};
 const graph_node string_body{
     std::nullopt,
-    edges({
+    {
         {is('\\'), &string_escape}, // before the catch-all below, which would also match '\'
         {is('"'), &string_close},
         {is_not('"'), &string_body},
-    }),
+    },
 };
 
 // ---- comments and whitespace ----
 
-const graph_node comment{token_type::COMMENT, edges({{is_not('\n'), &comment}})};
-const graph_node whitespace{token_type::WHITESPACE, edges({{is_whitespace, &whitespace}})};
+const graph_node comment{token_type::COMMENT, {{is_not('\n'), &comment}}};
+const graph_node whitespace{token_type::WHITESPACE, {{is_whitespace, &whitespace}}};
 
 // ---- operators ----
 
@@ -355,27 +336,27 @@ const graph_node exponent{token_type::EXPONENT, {}};
 const graph_node xor_operator{token_type::XOR, {}};
 const graph_node address{token_type::ADDRESS, {}};
 
-const graph_node minus{token_type::MINUS, edges({{is('>'), &pointer}})};
-const graph_node bit_and{token_type::BIT_AND, edges({{is('&'), &logical_and}})};
-const graph_node bit_or{token_type::BIT_OR, edges({{is('|'), &logical_or}})};
-const graph_node not_operator{token_type::NOT, edges({{is('='), &not_equal}})};
-const graph_node assign{token_type::ASSIGN, edges({{is('='), &equal}})};
+const graph_node minus{token_type::MINUS, {{is('>'), &pointer}}};
+const graph_node bit_and{token_type::BIT_AND, {{is('&'), &logical_and}}};
+const graph_node bit_or{token_type::BIT_OR, {{is('|'), &logical_or}}};
+const graph_node not_operator{token_type::NOT, {{is('='), &not_equal}}};
+const graph_node assign{token_type::ASSIGN, {{is('='), &equal}}};
 
 const graph_node lesser{
     token_type::LESSER,
-    edges({
+    {
         {is('-'), &dereference},
         {is('='), &less_or_equal},
         {is('<'), &left_shift},
-    }),
+    },
 };
 
 const graph_node greater{
     token_type::GREATER,
-    edges({
+    {
         {is('='), &greater_or_equal},
         {is('>'), &right_shift},
-    }),
+    },
 };
 
 // ---- punctuators ----
@@ -394,7 +375,7 @@ const graph_node comma{token_type::COMMA, {}};
 
 const graph_node start{
     std::nullopt,
-    edges({
+    {
         // keywords
         {is('b'), &kw_prefix_b},
         {is('c'), &kw_prefix_c},
@@ -450,7 +431,7 @@ const graph_node start{
         {is(';'), &semi_colon},
         {is(':'), &colon},
         {is(','), &comma},
-    }),
+    },
 };
 
 // NOLINTEND(bugprone-throwing-static-initialization)

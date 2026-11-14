@@ -1,12 +1,17 @@
 #pragma once
 
-#include <optional>
 #include <string>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
+// Structure and Function are non-owning handles (pointers into the AST), so a lookup can
+// return a null handle for a missing name instead of wrapping the handle in an optional.
 template <class Variable, class Structure, class Function> class symbol_table {
+    static_assert(std::is_pointer_v<Structure> && std::is_pointer_v<Function>,
+                  "struct and function symbols must be pointer handles");
+
     using scope = std::unordered_map<std::string, Variable>;
     std::vector<scope> scopes{1}; // The outermost scope holds global variables.
     std::unordered_map<std::string, Structure> structs;
@@ -15,6 +20,10 @@ template <class Variable, class Structure, class Function> class symbol_table {
 
     void leave_scope() {
         scopes.pop_back();
+    }
+    // JAQR rejects shadowing visible variables and collisions across global categories.
+    bool name_taken(const std::string &name) const {
+        return lookup_variable(name) || structs.contains(name) || functions.contains(name);
     }
 
   public:
@@ -47,41 +56,41 @@ template <class Variable, class Structure, class Function> class symbol_table {
                 return &found->second;
         return nullptr;
     }
-    std::optional<Structure> lookup_struct(const std::string &name) const {
-        if (const auto found = structs.find(name); found != structs.end())
-            return found->second;
-        return std::nullopt;
+    Structure lookup_struct(const std::string &name) const {
+        const auto found = structs.find(name);
+        return found == structs.end() ? nullptr : found->second;
     }
-    std::optional<Function> lookup_function(const std::string &name) const {
-        if (const auto found = functions.find(name); found != functions.end())
-            return found->second;
-        return std::nullopt;
+    Function lookup_function(const std::string &name) const {
+        const auto found = functions.find(name);
+        return found == functions.end() ? nullptr : found->second;
     }
-    std::optional<Function> lookup_method(const std::string &owner, const std::string &name) const {
+    // The owner-then-method order mirrors `owner.method` in the source.
+    // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+    Function lookup_method(const std::string &owner, const std::string &name) const {
         if (const auto group = methods.find(owner); group != methods.end())
             if (const auto found = group->second.find(name); found != group->second.end())
                 return found->second;
-        return std::nullopt;
+        return nullptr;
     }
 
-    // JAQR rejects shadowing visible variables and collisions across global categories.
-    // Methods instead have a separate namespace per owning struct.
+    // Methods have a separate namespace per owning struct, so only the other categories
+    // check name_taken.
     bool declare_variable(std::string name, Variable symbol) {
-        if (lookup_variable(name) || structs.contains(name) || functions.contains(name))
+        if (name_taken(name))
             return false;
         return scopes.back().emplace(std::move(name), std::move(symbol)).second;
     }
     bool declare_struct(std::string name, Structure symbol) {
-        if (lookup_variable(name) || structs.contains(name) || functions.contains(name))
+        if (name_taken(name))
             return false;
-        return structs.emplace(std::move(name), std::move(symbol)).second;
+        return structs.emplace(std::move(name), symbol).second;
     }
     bool declare_function(std::string name, Function symbol) {
-        if (lookup_variable(name) || structs.contains(name) || functions.contains(name))
+        if (name_taken(name))
             return false;
-        return functions.emplace(std::move(name), std::move(symbol)).second;
+        return functions.emplace(std::move(name), symbol).second;
     }
     bool declare_method(const std::string &owner, std::string name, Function symbol) {
-        return methods[owner].emplace(std::move(name), std::move(symbol)).second;
+        return methods[owner].emplace(std::move(name), symbol).second;
     }
 };

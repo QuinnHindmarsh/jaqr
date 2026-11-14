@@ -1,9 +1,11 @@
 #include "tokeniser.h"
 #include "dfa.h"
-#include "edge.h"
+#include <cstddef>
 #include <format>
+#include <optional>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 /*
 outline of the tokeniser algorithm
@@ -25,31 +27,19 @@ stopping in a non-accepting state is always an error, never a fallback to an ear
 accepting state. so 16b is an error, not INT_LITERAL '16' then IDENTIFIER 'b'.
 */
 
+namespace {
+
 struct position {
-    size_t line;
-    size_t col;
+    std::size_t line;
+    std::size_t col;
 };
 
-// returns the node reached by following ch, or nullptr if no edge of node matches ch
-static const graph_node *next_state(const graph_node *node, char ch) {
-    const graph_node *next = nullptr;
-
-    for (const std::unique_ptr<edge> &outgoing_edge : node->edges) {
-        if (outgoing_edge->matches(ch)) {
-            next = outgoing_edge->to;
-            break;
-        }
-    }
-
-    return next;
-}
-
-static char char_at(const std::vector<std::vector<char>> &input, const position &pos) {
+char char_at(const std::vector<std::vector<char>> &input, const position &pos) {
     return input[pos.line][pos.col];
 }
 
 // moves pos past the end of its line (and any empty lines) onto the next char
-static position skip_line_ends(const std::vector<std::vector<char>> &input, const position &start) {
+position skip_line_ends(const std::vector<std::vector<char>> &input, const position &start) {
     position pos = start;
     while (pos.line < input.size() && pos.col >= input[pos.line].size()) {
         pos = {pos.line + 1, 0};
@@ -58,24 +48,25 @@ static position skip_line_ends(const std::vector<std::vector<char>> &input, cons
 }
 
 // the position of the char after pos, which may be on the next line
-static position advance(const std::vector<std::vector<char>> &input, const position &pos) {
+position advance(const std::vector<std::vector<char>> &input, const position &pos) {
     return skip_line_ends(input, {pos.line, pos.col + 1});
 }
 
 // builds the token covering [start, end), which may span multiple lines
-static token make_token(const std::vector<std::vector<char>> &input, token_type type,
-                        const position &start, const position &end) {
+token make_token(const std::vector<std::vector<char>> &input, token_type type,
+                 const position &start, const position &end) {
     std::string lexeme;
     for (position pos = start; pos.line != end.line || pos.col != end.col;
          pos = advance(input, pos)) {
         lexeme += char_at(input, pos);
     }
 
+    // TODO: see token.h; these casts go away once token stores std::size_t positions.
     return {type, lexeme, static_cast<int>(start.line), static_cast<int>(start.col)};
 }
 
 // shows '\n', '\t' and '\r' as escapes so they don't break the error message
-static std::string printable(char ch) {
+std::string printable(char ch) {
     switch (ch) {
     case '\n':
         return "\\n";
@@ -89,18 +80,24 @@ static std::string printable(char ch) {
 }
 
 // positions in error messages are 0-indexed
-[[noreturn]] static void report_unexpected_char(char ch, const position &pos) {
+// TODO: editors and most compilers report 1-based lines and columns. Switching means changing
+// both LEX messages here, the parser's SYN messages (which share the 0-based token positions)
+// and the expectations in tests/tokeniser_tests.cpp and
+// tests/tokeniser_parser_integration_tests.cpp together.
+[[noreturn]] void report_unexpected_char(char ch, const position &pos) {
     throw std::runtime_error(std::format("LEX001: unexpected character '{}' at line {}, column {}",
                                          printable(ch), pos.line, pos.col));
 }
 
-[[noreturn]] static void report_unexpected_end(const std::vector<std::vector<char>> &input,
-                                               const position &token_start) {
+[[noreturn]] void report_unexpected_end(const std::vector<std::vector<char>> &input,
+                                        const position &token_start) {
     throw std::runtime_error(std::format(
         "LEX002: unexpected end of input at line {}, column {} (unfinished token starts at "
         "line {}, column {})",
         input.size() - 1, input.back().size(), token_start.line, token_start.col));
 }
+
+} // namespace
 
 std::vector<token> tokenise(const std::vector<std::vector<char>> &input) {
     std::vector<token> tokens;
@@ -113,7 +110,7 @@ std::vector<token> tokenise(const std::vector<std::vector<char>> &input) {
 
         while (pos.line < input.size()) {
             const char ch = char_at(input, pos);
-            const graph_node *next = next_state(current_node, ch);
+            const graph_node *next = current_node->next(ch);
 
             if (next == dfa_reject) {
                 report_unexpected_char(ch, pos);

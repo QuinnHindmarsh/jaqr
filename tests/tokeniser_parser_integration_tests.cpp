@@ -1,4 +1,3 @@
-#include "../src/ast/ast_root.h"
 #include "../src/ast/declaration.h"
 #include "../src/ast/expression.h"
 #include "../src/ast/expression_base.h"
@@ -33,7 +32,7 @@ namespace {
 // running the two stages
 // ---------------------------------------------------------------------------------------------
 
-ast_root_ptr parse_source(std::string_view source) {
+program_ptr parse_source(std::string_view source) {
     return parse(tokenise(to_lines(source)));
 }
 
@@ -58,7 +57,7 @@ const function_decl &function_at(const program &root, size_t index) {
 
 // the dumps of the statements of main, separated by spaces, without the wrapper around them
 std::string dump_statements(std::string_view statements) {
-    const ast_root_ptr root = parse_source(in_main(statements));
+    const program_ptr root = parse_source(in_main(statements));
     std::string text;
     for (const stmt_ptr &statement : function_at(*root, 0).body->statements) {
         if (!text.empty()) {
@@ -71,7 +70,7 @@ std::string dump_statements(std::string_view statements) {
 
 // the dump of one expression, parsed as an expression statement in main
 std::string dump_expression(std::string_view expression) {
-    const ast_root_ptr root = parse_source(in_main(std::format("{};", expression)));
+    const program_ptr root = parse_source(in_main(std::format("{};", expression)));
     const std::vector<stmt_ptr> &statements = function_at(*root, 0).body->statements;
     if (statements.size() != 1) {
         return std::format("<{} statements>", statements.size());
@@ -163,7 +162,7 @@ testing::AssertionResult covers(std::string_view source, const source_span &span
 testing::AssertionResult fails_with(std::string_view source, std::string_view message_start,
                                     std::string_view message_end) {
     try {
-        const ast_root_ptr root = parse_source(source);
+        const program_ptr root = parse_source(source);
         return testing::AssertionFailure() << "no error, parsed as " << dump(*root);
     } catch (const std::runtime_error &error) {
         const std::string_view message = error.what();
@@ -531,7 +530,7 @@ TEST(DereferenceSplit, NothingAfterTheSplitIsAnError) {
 
 TEST(DereferenceSplit, SplitHalvesHaveTheirOwnSpans) {
     constexpr std::string_view source = "fn main() { limit<-12; }";
-    const ast_root_ptr root = parse_source(source);
+    const program_ptr root = parse_source(source);
     const expr_stmt &statement = as<expr_stmt>(*function_at(*root, 0).body->statements.at(0));
     const binary_expr &comparison = as<binary_expr>(*statement.expression);
     EXPECT_TRUE(covers(source, comparison.source, "limit<-12"));
@@ -941,7 +940,7 @@ TEST(KeywordMunch, MainIsOnlyAllowedAsTheMainFunction) {
 TEST(KeywordMunch, NamesTheSpecMentionsButTheGrammarDoesNotReserve) {
     // the grammar has no null literal and no void type, so both are plain identifiers
     EXPECT_EQ(dump_statements("p = null;"), "(expr (= p null))");
-    const ast_root_ptr root = parse_source("fn f(): void { }");
+    const program_ptr root = parse_source("fn f(): void { }");
     const named_type_syntax &result = as<named_type_syntax>(*function_at(*root, 0).return_type);
     EXPECT_EQ(result.name, "void");
 }
@@ -1750,7 +1749,7 @@ constexpr std::string_view spans_source = "# running sum\n"                  // 
 } // namespace
 
 TEST(SourceSpans, GlobalDeclarationRunsFromDefineToTheSemicolon) {
-    const ast_root_ptr root = parse_source(spans_source);
+    const program_ptr root = parse_source(spans_source);
     const variable_decl &total = as<variable_decl>(*root->declarations.at(0));
     EXPECT_TRUE(covers(spans_source, total.source, "define let total: int = 0;"));
     EXPECT_TRUE(covers(spans_source, total.name->source, "total"));
@@ -1759,7 +1758,7 @@ TEST(SourceSpans, GlobalDeclarationRunsFromDefineToTheSemicolon) {
 }
 
 TEST(SourceSpans, FunctionSpanningLines) {
-    const ast_root_ptr root = parse_source(spans_source);
+    const program_ptr root = parse_source(spans_source);
     const function_decl &bump = function_at(*root, 1);
     EXPECT_EQ(bump.source.start_line, 2);
     EXPECT_EQ(bump.source.start_col, 0);
@@ -1782,7 +1781,7 @@ TEST(SourceSpans, FunctionSpanningLines) {
 }
 
 TEST(SourceSpans, ExpressionAfterACommentAndTabs) {
-    const ast_root_ptr root = parse_source(spans_source);
+    const program_ptr root = parse_source(spans_source);
     const stmt &statement = *function_at(*root, 1).body->statements.at(0);
     EXPECT_TRUE(covers(spans_source, statement.source, "return total = total + by;"));
     const assignment_expr &assignment = as<assignment_expr>(*as<return_stmt>(statement).value);
@@ -1797,7 +1796,7 @@ TEST(SourceSpans, ExpressionAfterACommentAndTabs) {
 }
 
 TEST(SourceSpans, MainAndItsVoidReturnType) {
-    const ast_root_ptr root = parse_source(spans_source);
+    const program_ptr root = parse_source(spans_source);
     const function_decl &main_function = function_at(*root, 2);
     EXPECT_EQ(main_function.source.start_line, 6);
     EXPECT_EQ(main_function.source.end_line, 11);
@@ -1808,7 +1807,7 @@ TEST(SourceSpans, MainAndItsVoidReturnType) {
 }
 
 TEST(SourceSpans, LocalDeclarationStatementTakesInTheSemicolon) {
-    const ast_root_ptr root = parse_source(spans_source);
+    const program_ptr root = parse_source(spans_source);
     const decl_stmt &statement = as<decl_stmt>(*function_at(*root, 2).body->statements.at(0));
     EXPECT_TRUE(covers(spans_source, statement.source, "let n: ->int = @total;"));
     const variable_decl &declaration = as<variable_decl>(*statement.declaration);
@@ -1818,7 +1817,7 @@ TEST(SourceSpans, LocalDeclarationStatementTakesInTheSemicolon) {
 }
 
 TEST(SourceSpans, MultiLineStringAndWhatFollowsIt) {
-    const ast_root_ptr root = parse_source(spans_source);
+    const program_ptr root = parse_source(spans_source);
     const expr_stmt &statement = as<expr_stmt>(*function_at(*root, 2).body->statements.at(1));
     EXPECT_TRUE(covers(spans_source, statement.source, "print(\"first\nsecond\", bump(2));"));
     const postfix_expr &call = as<postfix_expr>(*statement.expression);
@@ -1838,7 +1837,7 @@ TEST(SourceSpans, MultiLineStringAndWhatFollowsIt) {
 }
 
 TEST(SourceSpans, SplitDereferenceAfterATab) {
-    const ast_root_ptr root = parse_source(spans_source);
+    const program_ptr root = parse_source(spans_source);
     const if_stmt &statement = as<if_stmt>(*function_at(*root, 2).body->statements.at(2));
     EXPECT_TRUE(covers(spans_source, statement.source, "if (n<-1) { return; }"));
     const conditional_branch &branch = statement.branches.at(0);
@@ -1853,8 +1852,8 @@ TEST(SourceSpans, WindowsLineEndingsGiveTheSameSpans) {
     for (const char ch : spans_source) {
         windows_source += ch == '\n' ? "\r\n" : std::string{ch};
     }
-    const ast_root_ptr unix_root = parse_source(spans_source);
-    const ast_root_ptr windows_root = parse_source(windows_source);
+    const program_ptr unix_root = parse_source(spans_source);
+    const program_ptr windows_root = parse_source(windows_source);
     // only nodes with no line break inside them: a '\r' in a multi-line token is part of it
     const source_span &unix_span = function_at(*unix_root, 1).body->statements.at(0)->source;
     const source_span &windows_span = function_at(*windows_root, 1).body->statements.at(0)->source;
@@ -1942,7 +1941,7 @@ TEST(Robustness, LongProgram) {
     }
     source += "fn main() { }\n";
 
-    const ast_root_ptr root = parse_source(source);
+    const program_ptr root = parse_source(source);
     ASSERT_EQ(root->declarations.size(), 2 * count + 1);
     EXPECT_EQ(dump(*root->declarations.front()), "(let v0 int int:0)");
     EXPECT_EQ(dump(*root->declarations.at(2 * count - 2)), "(let v4999 int int:4999)");
@@ -1957,13 +1956,13 @@ TEST(Robustness, LongProgram) {
 
 TEST(Robustness, LongFunctionBody) {
     constexpr size_t count = 5000;
-    const ast_root_ptr root = parse_source(in_main(repeated("x = x + 1; ", count)));
+    const program_ptr root = parse_source(in_main(repeated("x = x + 1; ", count)));
     EXPECT_EQ(function_at(*root, 0).body->statements.size(), count);
 }
 
 TEST(Robustness, LongProgramOnOneLine) {
     constexpr size_t count = 2000;
-    const ast_root_ptr root = parse_source(repeated("inv{x<-1};", count));
+    const program_ptr root = parse_source(repeated("inv{x<-1};", count));
     ASSERT_EQ(root->declarations.size(), count);
     EXPECT_EQ(dump(*root->declarations.back()), "(inv (< x (- int:1)))");
     EXPECT_EQ(root->declarations.back()->source.start_line, 0);

@@ -1,7 +1,8 @@
 """End-to-end tests: JAQR source in, program behaviour out.
 
-`jaqr file.jaqr` compiles the program (through generated C++) and runs it. These
-tests call the real jaqr executable on every case under tests/e2e/cases/:
+`jaqr --exec file.jaqr -o file.cpp` writes the generated C++ to file.cpp, compiles
+it and runs the program. These tests call the real jaqr executable that way on every
+case under tests/e2e/cases/, each with its own -o file in a fresh temporary directory:
 
   run/<name>.jaqr     must compile and run, exiting 0. Its stdout must equal
                       <name>.out exactly. Optional <name>.in is piped to stdin.
@@ -10,7 +11,11 @@ tests call the real jaqr executable on every case under tests/e2e/cases/:
                       non-zero without crashing, report that code on stderr, and
                       print nothing on stdout (the program never runs).
 
-Usage (after `just build`):
+To add a run case, write <name>.jaqr (and <name>.in if it reads input), then create
+<name>.out from `jaqr --exec <name>.jaqr -o <scratch>.cpp < <name>.in` after checking
+by hand that the output is right.
+
+Usage (after `just build`; `just e2e` and `ctest` also run this):
   python tests/e2e/run_e2e.py                 # every case
   python tests/e2e/run_e2e.py -k step         # only cases whose name contains "step"
   python tests/e2e/run_e2e.py --cxx clang++   # C++ compiler jaqr uses (sets JAQR_CXX)
@@ -25,14 +30,13 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 
 HERE = pathlib.Path(__file__).resolve().parent
 REPO = HERE.parent.parent
 CASES = HERE / "cases"
 EXPECT_RE = re.compile(r"^#\s*expect:\s*((?:LEX|SYN|SEM)\d{3})\s*$")
 TIMEOUT_SECONDS = 60
-# jaqr compiles to a temporary program.cpp; compiler errors mention that file
-GENERATED_CPP_RE = re.compile(r"program\.cpp")
 
 
 @dataclasses.dataclass
@@ -63,8 +67,13 @@ def crashed(result):
     return result.returncode < 0 or result.returncode > 255
 
 
-def run_jaqr(args, case, stdin):
-    command = [args.jaqr, str(case.source)]
+def generated_cpp_mentioned(output, stderr):
+    """Whether the C++ compiler reported errors in the generated source, which it names by path."""
+    return output.name in stderr
+
+
+def run_jaqr(args, case, output, stdin):
+    command = [args.jaqr, "--exec", str(case.source), "-o", str(output)]
     try:
         return subprocess.run(command, input=stdin, capture_output=True, text=True,
                               timeout=TIMEOUT_SECONDS, env=args.env)
@@ -91,7 +100,7 @@ def build_compiler(jaqr):
 def test_environment(args):
     env = dict(os.environ)
     if args.cxx:
-        # a full path: jaqr's own PATH search does not add .exe on Windows
+        # resolved here so that its directory can be put first on PATH below
         env["JAQR_CXX"] = shutil.which(args.cxx) or args.cxx
     if os.name == "nt":
         # MinGW builds of jaqr, and the programs jaqr builds, load libstdc++/libc++ DLLs from
@@ -102,13 +111,13 @@ def test_environment(args):
     return env
 
 
-def check_run(args, case):
+def check_run(args, case, output):
     expected = case.sidecar(".out")
     if expected is None:
         raise Failure(f"missing expected output file {case.source.with_suffix('.out').name}")
-    result = run_jaqr(args, case, case.sidecar(".in") or "")
+    result = run_jaqr(args, case, output, case.sidecar(".in") or "")
     if result.returncode != 0:
-        if GENERATED_CPP_RE.search(result.stderr):
+        if generated_cpp_mentioned(output, result.stderr):
             stage = "generated C++ does not compile"
         elif re.search(r"\b(LEX|SYN|SEM)\d{3}\b|^Error:", result.stderr, re.MULTILINE):
             stage = "jaqr rejected a valid program"
@@ -121,20 +130,20 @@ def check_run(args, case):
         raise Failure(f"output mismatch\n--- expected\n{expected!r}\n--- actual\n{actual!r}")
 
 
-def check_reject(args, case):
+def check_reject(args, case, output):
     first_line = case.source.read_text(encoding="utf-8").splitlines()[0]
     match = EXPECT_RE.match(first_line)
     if not match:
         raise Failure("first line must be `# expect: <CODE>`, e.g. `# expect: SEM017`")
     code = match.group(1)
-    result = run_jaqr(args, case, "")
+    result = run_jaqr(args, case, output, "")
     if crashed(result):
         raise Failure(f"jaqr crashed (exit {result.returncode}) instead of reporting {code}:\n{result.stderr}")
     if result.returncode == 0:
         raise Failure(f"jaqr accepted and ran a program that should fail with {code}")
     if result.stdout.strip():
         raise Failure(f"the program produced output although it should be rejected:\n{result.stdout[:500]}")
-    if GENERATED_CPP_RE.search(result.stderr):
+    if generated_cpp_mentioned(output, result.stderr):
         raise Failure(f"jaqr let an invalid program through to the C++ compiler instead of reporting {code}:\n"
                       f"{result.stderr.strip()[:1500]}")
     if code not in result.stderr:
@@ -152,11 +161,15 @@ def discover(name_filter):
 
 
 def check(args, case):
-    try:
-        (check_run if case.kind == "run" else check_reject)(args, case)
-        return case, None
-    except Failure as failure:
-        return case, str(failure)
+    # jaqr writes the generated C++ to the -o file before compiling, so every case gets its own
+    # directory and parallel cases never share an output file.
+    with tempfile.TemporaryDirectory(prefix="jaqr-e2e-") as directory:
+        output = pathlib.Path(directory) / f"{case.source.stem}.cpp"
+        try:
+            (check_run if case.kind == "run" else check_reject)(args, case, output)
+            return case, None
+        except Failure as failure:
+            return case, str(failure)
 
 
 def main():

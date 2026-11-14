@@ -89,6 +89,11 @@ enum class token_type : std::uint8_t {
 struct token {
     token_type type;
     std::string lexeme;
+    // Zero-based position of the lexeme's first char.
+    // TODO: the tokeniser counts in std::size_t and narrows to int when it builds a token.
+    // Storing std::size_t would remove that cast, but it ripples into the parser (its
+    // source_position and the int source_span in src/ast/source.h) and into every test that
+    // builds or compares tokens with int positions.
     int line;
     int column;
 };

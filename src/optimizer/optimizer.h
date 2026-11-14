@@ -1,5 +1,7 @@
 #pragma once
 
+#include "../ast/declaration.h"
+#include "../ast/expression.h"
 #include "../ast/statement.h"
 
 #include <cstddef>
@@ -8,6 +10,9 @@
 #include <unordered_set>
 
 struct optimization_options {
+    // TODO: optimisation cannot be disabled from the command line yet: src/main.cpp calls
+    // gen_code with the default options and has no --no-optimize flag, so `enabled = false` is
+    // only reachable through code_generator::gen_code (as tests/optimizer.cpp does).
     bool enabled = true;
     std::size_t max_unroll_iterations = 8;
     std::size_t max_unrolled_statements = 64;
