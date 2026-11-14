@@ -404,7 +404,7 @@ All applicable invariants must hold for a transaction to commit.
 
 The same applies to a call to any function or method that performs I/O, directly or through other calls. The `reject` block of a step is outside the transaction, so I/O is permitted there.
 
-I/O remains permitted in ordinary contexts, subject to the language's normal syntax and typing requirements. [`io.md`](io.md) lists these requirements.
+I/O remains permitted in ordinary contexts, subject to the language's normal syntax and typing requirements. [`features.md`](features.md#io) lists these requirements.
 
 The aim is to prevent irreversible I/O operations from occurring within a transaction that may subsequently roll back.
 
