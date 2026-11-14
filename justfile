@@ -10,6 +10,17 @@ build: configure
 run source *args: build
     ./build/debug/jaqr "$@"
 
+# configure with the tests enabled (the first time downloads GoogleTest), build, run every test
+test:
+    cmake --preset debug -DBUILD_TESTING=ON
+    cmake --build --preset debug
+    ctest --test-dir build/debug --output-on-failure
+
+# only the end-to-end cases under tests/e2e/cases, against the debug build
+[positional-arguments]
+e2e *args: build
+    python3 tests/e2e/run_e2e.py "$@"
+
 release:
     cmake --preset release
     cmake --build --preset release
@@ -22,6 +33,8 @@ format-tool:
     fi
     .format-venv/bin/python -m pip install --disable-pip-version-check 'clang-format==18.1.6'
 
+# TODO: format and format-check cover only src/; extend them to tests/ and runtime/ once those
+# have been reformatted in one dedicated commit (about 7000 test lines would change).
 format: format-tool
     find src -type f \( -name '*.cpp' -o -name '*.hpp' -o -name '*.h' \) -exec .format-venv/bin/clang-format -i {} +
 

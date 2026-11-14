@@ -11,8 +11,9 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Install Just
-        run: sudo apt-get update && sudo apt-get install -y just
+      # `just lint` configures the debug preset first, which uses the Ninja generator
+      - name: Install Just and Ninja
+        run: sudo apt-get update && sudo apt-get install -y just ninja-build
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
@@ -20,3 +21,19 @@ jobs:
         run: just format-check
       - name: Run clang-tidy
         run: just lint
+
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build g++-13
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Configure
+        run: cmake --preset debug -DBUILD_TESTING=ON -DCMAKE_CXX_COMPILER=g++-13
+      - name: Build
+        run: cmake --build --preset debug
+      - name: Test
+        run: ctest --test-dir build/debug --output-on-failure

@@ -15,8 +15,12 @@ auto bounded = generator.gen_code(ast, {
 });
 ```
 
-The current command-line `main` only reads a source file; these options belong to
-the generation API, ready for the parser/semantic-analysis pipeline to call.
+The command-line `jaqr` runs the whole pipeline (tokenise, parse, analyse, generate),
+but it has no flag for these options: it always calls `gen_code` with the defaults, so
+optimisation is on with the limits in the first example. The options can be changed
+only by calling `gen_code` from C++, as the tests do. In the example, `generator` is a
+`code_generator` built from the impl and invariant indexes that `analyse` returns, and
+`ast` is the checked `program`.
 
 ## Implemented passes
 
@@ -59,7 +63,7 @@ Building JAQR in release mode optimises JAQR itself, not subsequent generated fi
 
 ## Verification
 
-Run `just test`. The regression fixture checks the optimisation plan, generates C++
+Run `just test` (see the README). The regression fixture checks the optimisation plan, generates C++
 with optimisation enabled and disabled, and compiles/runs both versions at `-O0`
 and `-O2`. Checks include side effects, scopes, loop bounds/budgets, overflow,
 constant folding, dead assignments, and step commit/rejection behaviour.

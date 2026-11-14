@@ -20,7 +20,7 @@ Syntax: [`grammar.md`](grammar.md). Examples: [`sample_code.md`](sample_code.md)
 | Operators | Arithmetic incl. floor division `\` and power `~`; bitwise; logical; pointer `@` `<-` |
 | Literals | Decimal, binary `2b101`, hex `16bff`, float, char, string, bool |
 | I/O | Built-in `print` and `scan` |
-| Safety | Static type checking, no shadowing, no implicit narrowing, compile-time error codes |
+| Safety | Static type checking, no shadowing, no implicit conversions except `int` and `float`, compile-time error codes |
 | Output | Readable C++20, with an optimiser |
 
 ---
@@ -32,8 +32,8 @@ Syntax: [`grammar.md`](grammar.md). Examples: [`sample_code.md`](sample_code.md)
 | Type | Size | Example |
 |---|---|---|
 | `int` | signed 32-bit | `42`, `2b1010`, `16bff` |
-| `float` | IEEE 754 32-bit | `3.14`, `.5`, `2.` |
-| `char` | signed 8-bit | `'a'`, `'\n'` |
+| `float` | IEEE 754 64-bit (C++ `double`) | `3.14`, `.5`, `2.` |
+| `char` | 8-bit (C++ `char`) | `'a'`, `'\n'` |
 | `byte` | unsigned 8-bit | `byte(255)` |
 | `bool` | `true` / `false` | `true` |
 
@@ -48,7 +48,8 @@ let grid: [2][3]float;          # 2 rows of 3 floats
 let s: [6]char = "hello";       # string literal = array of char
 ```
 
-- Length is a positive compile-time constant.
+- Length is a positive compile-time constant: integer literals combined with
+  `+ - * /`. A variable, even an `imut` one, is not accepted.
 - Arrays are **values**: assignment, parameters and returns copy the whole array.
 - No array-to-pointer decay.
 - Index must be `int`. No automatic bounds checks.
@@ -63,7 +64,10 @@ let q: ->int = new(int, 4);   # heap allocation of 4 ints
 ```
 
 - Pointer types must match exactly.
-- Pointer arithmetic (`p + 1`) moves by whole elements.
+- There is no `null` literal. A pointer gets its value from `@` or `new`.
+- Pointer arithmetic (`p + 1`, `p - 1`, `p - q`) moves by whole elements. There is no
+  `++` or `--`.
+- Memory from `new` is never freed.
 - You cannot take the address of `imut` or `state` storage, so state can never be
   changed through an alias.
 
@@ -104,6 +108,7 @@ Scoping rules:
 - Names must be declared before use.
 - No redeclaration in the same scope.
 - **No shadowing**: an inner block cannot reuse a visible outer name (`SEM002`).
+- A name can be reused after its block has ended.
 
 ## 3. Type conversions
 
@@ -179,6 +184,7 @@ fn square(x: int): int {
 - `fn main()` takes no parameters, has no return type, and is required exactly once.
 - A function must be defined before it is called.
 - No overloading: every function name is unique.
+- There is no `void` keyword: `main` and update functions return nothing.
 - Every path of a non-void function must return (`SEM008`).
 
 ### 6.1 Recursion
@@ -201,8 +207,9 @@ fn fib(n: int): int {
   never changes the caller's array. Pass a pointer to share state between calls.
 - Recursion depth is limited only by the C++ stack. The end-to-end tests recurse
   10 000 levels deep.
-- Mutual recursion is not possible: the second function is not yet defined when
-  the first one calls it.
+- Mutual recursion between functions is not possible: the second function is not
+  yet defined when the first one calls it. Methods of the same `impl` block can call
+  each other in any order.
 
 Tested end to end in `tests/e2e/cases/run/recursion.jaqr`.
 
@@ -217,8 +224,10 @@ program state, checked against declared rules.
 define state balance: int = 100;
 ```
 
-State can be read anywhere. It can only be written inside a `step` or an update
-function running inside a step. A write anywhere else is `SEM017`.
+State can be read anywhere. It can only be written inside a `step` written in
+`main`, or by an update function running inside a step. A write anywhere else is
+`SEM017`; a step in another function can change state only by calling update
+functions. State used with a step must have a type without pointers.
 
 ### 7.2 Invariants
 
@@ -229,6 +238,9 @@ inv { balance >= 0 };
 - Must be exactly `bool`.
 - May only use state variables, literals, operators and casts.
 - No function calls, locals, pointer dereferences or side effects (`SEM020`).
+- Guards only the steps written after it. A top-level `inv` covers every later step
+  in the file, including steps inside functions defined after it; an `inv` inside a
+  block covers the rest of that block.
 
 ### 7.3 Steps
 
@@ -244,12 +256,17 @@ step {
 2. When the body finishes, every invariant is checked against the pending state.
 3. If all are `true`, the changes are committed together.
 4. If any is `false`, every change is discarded and the optional `reject` block runs.
+   Execution then continues after the step; the program does not stop.
 
 Restrictions inside a step:
 
 - No nested steps (`SEM019`).
 - No `return` or other early exit (`SEM023`).
-- No `print` / `scan`, because output can't be rolled back.
+- No `print` / `scan`, because output can't be rolled back. This includes calling a
+  function that prints or scans (`SEM021`).
+
+The `reject` block runs after the rollback. It can print and scan, but it cannot write
+state, call update functions, contain a step or return.
 
 ### 7.4 Update functions
 
@@ -262,7 +279,8 @@ step { deposit(balance)(50); }
 ```
 
 - The first parameter list is **state**, the second is ordinary arguments.
-- Called as `f(state...)(args...)`, only inside an active step (`SEM018`).
+- Called as `f(state...)(args...)`, only inside an active step (`SEM018`). Each state
+  argument must be mutable state storage.
 - Their writes join the enclosing step's transaction.
 - No nested steps and no I/O inside.
 
@@ -284,7 +302,10 @@ fn main() {
 ```
 
 - Methods use `this` for the receiver.
-- An update method has one parameter list: the receiver is the state.
+- An update method has one parameter list: the receiver is the state. Call it as
+  `object.method(args)`, where `object` is a mutable state variable.
+- An ordinary method may assign to `this` fields when called on a mutable local
+  variable, but not on an `imut` variable (`SEM012`) or a state variable (`SEM017`).
 
 ## 8. Input and output
 
@@ -315,8 +336,8 @@ let x: int = 1;   # trailing comment
 
 | Feature | Detail |
 |---|---|
-| Clear diagnostics | One error per run with a stable code: `LEX001`, `SYN001`, `SEM001`–`SEM025`, plus file, line and column |
+| Clear diagnostics | One error per run with a stable code: `LEX001`–`LEX002`, `SYN001`–`SYN002`, `SEM001`–`SEM025`, plus line and column (semantic errors also name the file). Positions start at 0 |
 | Static checking | Types, scopes, return paths, immutability, pointer and state rules checked before any code is generated |
 | C++20 output | Generated code is plain C++ and compiles with any C++20 compiler |
 | Optimiser | Constant folding, dead-code removal, constant-branch simplification, small loop unrolling; never changes step semantics. See [`optimisation.md`](optimisation.md) |
-| Tested | Unit, integration and generated-code tests (`just test`), plus end-to-end program tests (`python tests/e2e/run_e2e.py`, see [`code_structure.md`](code_structure.md#41-end-to-end-tests)) |
+| Tested | Unit, integration, generated-code and end-to-end program tests, all run by `just test`; `just e2e` runs only the end-to-end tests (see [`code_structure.md`](code_structure.md#41-end-to-end-tests)) |

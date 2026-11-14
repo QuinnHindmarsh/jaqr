@@ -11,9 +11,10 @@ with `jaqr_` receives the prefix too: `jaqr_class` becomes `jaqr_jaqr_class`.
 This avoids merging two distinct source names. The AST, diagnostics and lookup
 maps retain the original JAQR spelling; string literals are not changed.
 
-The top-level entry point remains C++ `main`. A method called main is a regular
-prefixed method. Method definitions use the same prefixed struct/method names as
-their declarations, such as `jaqr_Record::jaqr_update`.
+The top-level entry point remains C++ `main`. Method definitions use the same
+prefixed struct/method names as their declarations, such as
+`jaqr_Record::jaqr_update`. (The parser does not accept a method called `main`; a
+tree built by hand with one gets the prefix like any other method.)
 
 Built-in calls retain their `jaqr_runtime::print` / `jaqr_runtime::scan` names.
 Compiler-generated step and invariant names use `jaqrInternal_`, which cannot

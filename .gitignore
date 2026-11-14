@@ -4,6 +4,10 @@ parser_tokeniser_integration_tests/
 .format-venv/
 TODO.md
 *.out
+# expected program output for the end-to-end tests
+!tests/e2e/cases/**/*.out
+__pycache__/
+*.pyc
 agents.md
 scratch.jaqr
 a.cpp

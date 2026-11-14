@@ -3,11 +3,12 @@
 Each program below is valid JAQR (Step). Save one as `name.jaqr` and run:
 
 ```sh
-./build/debug/jaqr name.jaqr
+./build/debug/jaqr --exec name.jaqr
 ```
 
-"Output" shows what the program prints when the generated C++ is compiled and run
-(see [`README.md`](README.md#6-compile-generated-c-code-generator)).
+Without `--exec`, `jaqr` only writes the generated C++ to `a.cpp`. "Output" shows what
+the program prints when it is run. The [project README](../README.md) explains how to
+build `jaqr` and how to compile the generated C++ yourself.
 
 ---
 
@@ -259,7 +260,7 @@ fn main() {
 }
 ```
 
-Output (per the semantic spec):
+Output:
 
 ```text
 70
@@ -306,7 +307,7 @@ fn main() {
 }
 ```
 
-Output (per the semantic spec):
+Output:
 
 ```text
 6
@@ -322,7 +323,10 @@ and an invariant over struct fields.
 
 ## 9. Programs the compiler rejects
 
-Each program is one error. Line and column numbers are zero-indexed.
+Each program is one error. Line and column numbers are zero-indexed. A semantic
+error is printed as `file.jaqr:line:col-line:col: CODE: message`; the table shows
+only `CODE: message`. `LEX` and `SYN` errors are printed as `Error: CODE: message at
+line L, column C`, with no file name.
 
 | Program | Compiler output |
 |---|---|
@@ -333,9 +337,11 @@ Each program is one error. Line and column numbers are zero-indexed.
 | `fn f(): int { let x: int = 1; }`<br>`fn main() { }` | `SEM008: function has a path without a return value` |
 | `fn main() { let x: int = 10 / 0; }` | `SEM005: division by constant zero` |
 | `fn main() { let x: int = 1; let p: ->int = @x; let q: ->float = p; }` | `SEM003: expected ->float, got ->int` |
-| `define state s: int = 0;`<br>`fn main() { step { step { } } }` | `SEM019: nested or update-function step` |
+| `define state s: int = 0;`<br>`fn main() { step { step { } } }` | `SEM019: step cannot be nested in another step or its reject branch` |
 | `define state s: int = 0;`<br>`fn main() { step { return; } }` | `SEM023: return is not allowed here` |
 | `define state s: int = 0;`<br>`update fn u(a: int)() { a = 1; }`<br>`fn main() { u(s)(); }` | `SEM018: update call requires an active step` |
 | `fn helper(): int { return 1; }` | `SEM024: exactly one fn main() is required` |
+| `fn main() { print(1, 2); }` | `SEM006: print requires exactly one argument` |
+| `define state s: int = 0;`<br>`fn main() { step { print(s); } }` | `SEM021: print is not allowed in a step, update function or invariant` |
 | `fn main() { let x: int = 123abc; }` | `LEX001: unexpected character 'a' ...` |
 | `fn main() { let x: int = ; }` | `SYN001: unexpected token ';' ...` |

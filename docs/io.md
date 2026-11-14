@@ -10,8 +10,10 @@ function-call syntax and require no JAQR declarations or parser special cases.
   Input failures and EOF retain the normal C++ stream state; calling scan again does
   not clear a previous failure. Failed extraction may modify the target, exactly as
   the underlying stream operation does.
-- Both support int, float, char and bool. Printing also supports string literals.
-  Default bool formatting is 0/1. Formatted char extraction skips leading whitespace.
+- Both take exactly one argument, written as an ordinary call. They support int,
+  float, char and bool. Printing also supports string literals written directly as
+  the argument (`print("hi")`); a `char` array is not printable. Default bool
+  formatting is 0/1. Formatted char extraction skips leading whitespace.
 - Scan needs mutable, non-state storage, including supported array elements and
   struct fields. Constants, temporary values and expressions such as `scan(x + 1)`
   are rejected. Byte, whole arrays, structs and pointer values are not printable or
@@ -47,8 +49,28 @@ outside the failed step and may perform I/O.
 
 This focused built-in resolver is not a complete semantic analyser: ordinary call
 validity, full type checking and pointer/state alias rules still require that stage.
-The existing command-line main remains a file reader; I/O is wired into the AST-to-C++
-generation API, not a new end-to-end compiler driver.
+`analyse` (src/semantic/semantic.cpp) runs the resolver first, before its own checks,
+so the command-line compiler reports every rule below before any other semantic
+error. The resolver throws a `builtin_error` and `analyse` rethrows it as a
+`semantic_error` with the file name, so it prints like every other semantic error:
+
+```text
+file.jaqr:0:12-0:22: SEM006: print requires exactly one argument
+```
+
+| Code | Rule |
+|---|---|
+| `SEM018` | `print` or `scan` written as an update call, `print(x)(y)` |
+| `SEM006` | Not exactly one argument |
+| `SEM021` | Call in a step, update function or invariant, directly or through a called function |
+| `SEM004` | `scan` target is a computed value rather than storage, such as `x + 1` |
+| `SEM012` | `scan` target is immutable |
+| `SEM017` | `scan` target is state |
+| `SEM003` | Unsupported argument type, such as `byte`, a pointer, a struct or an array |
+
+`code_generator::gen_code` calls the resolver again to get the call map. A program
+that did not go through `analyse` gets the same rules there as a `builtin_error`,
+which is a `std::invalid_argument`.
 
 Run `just test` for generated-code tests with piped input, exact output comparisons,
 input failure and EOF, name shadowing, rejected calls and step/update restrictions.

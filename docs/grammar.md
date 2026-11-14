@@ -27,7 +27,8 @@ The parser is recursive descent with one token of lookahead.
 
 The tokeniser is a hand-built DFA using **maximal munch with no backtracking**.
 If it stops in a non-accepting state, that is an error: `16b` is a `LEX` error, not
-`16` followed by `b`.
+`16` followed by `b`. An unexpected character is `LEX001`; input that ends inside a
+token, such as an unterminated string, is `LEX002`.
 
 ### 1.1 Whitespace and comments
 
@@ -85,8 +86,12 @@ Rules:
 - A letter or digit directly after a number is an error: `123abc`, `2b102`, `16bfg`.
 - Exception: after a trailing `.`, so `5.foo` is `FLOAT_LITERAL 5.` then `IDENTIFIER foo`.
 - A second `.` is an error: `1.2.3`.
-- A char literal holds exactly one character or escape. `''` is an error.
+- A char literal holds exactly one character or escape. `''` is an error, and so is a
+  raw newline between the quotes.
 - String literals may span lines.
+- The parser, not the tokeniser, converts a literal to its value. An `INT_LITERAL`
+  above 2147483647 (which includes `-2147483648`, since `-` is a separate operator)
+  and a float too large for a `double` are `SYN002` errors.
 
 ### 1.4 Operators and punctuation
 

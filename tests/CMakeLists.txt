@@ -1,5 +1,25 @@
 include(FetchContent)
 
+# CMake builds whose curl uses OpenSSL (such as those shipped with MinGW toolchains, which
+# carry libcrypto next to cmake.exe) have no CA certificates on Windows, so downloading
+# GoogleTest fails certificate verification. Unless a bundle was given, use Git for Windows'.
+if(CMAKE_HOST_WIN32 AND NOT CMAKE_TLS_CAINFO AND NOT DEFINED ENV{CMAKE_TLS_CAINFO})
+    get_filename_component(_jaqr_cmake_bin "${CMAKE_COMMAND}" DIRECTORY)
+    file(GLOB _jaqr_openssl "${_jaqr_cmake_bin}/libcrypto-*.dll")
+    find_package(Git QUIET)
+    if(_jaqr_openssl AND GIT_EXECUTABLE)
+        get_filename_component(_jaqr_git_root "${GIT_EXECUTABLE}" DIRECTORY)
+        get_filename_component(_jaqr_git_root "${_jaqr_git_root}" DIRECTORY)
+        # git.exe is in <Git>/cmd or <Git>/mingw64/bin, so the root is <Git> or <Git>/mingw64
+        find_file(JAQR_CA_BUNDLE ca-bundle.crt
+            PATHS "${_jaqr_git_root}/mingw64/etc/ssl/certs" "${_jaqr_git_root}/etc/ssl/certs"
+            NO_DEFAULT_PATH)
+        if(JAQR_CA_BUNDLE)
+            set(CMAKE_TLS_CAINFO "${JAQR_CA_BUNDLE}")
+        endif()
+    endif()
+endif()
+
 FetchContent_Declare(
     googletest
     URL https://github.com/google/googletest/archive/refs/tags/v1.15.2.tar.gz
