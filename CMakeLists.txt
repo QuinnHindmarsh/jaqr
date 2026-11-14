@@ -1,4 +1,18 @@
 cmake_minimum_required(VERSION 3.21)
+
+# On Windows, CMake can select an MSVC installation even outside a Visual Studio
+# developer shell, where it cannot link. If no compiler was requested and cl is
+# not on PATH, prefer a g++/clang++ that is.
+if(CMAKE_HOST_WIN32 AND NOT DEFINED CMAKE_CXX_COMPILER AND NOT DEFINED ENV{CXX})
+    find_program(JAQR_MSVC_CL NAMES cl NO_CACHE)
+    if(NOT JAQR_MSVC_CL)
+        find_program(JAQR_DEFAULT_CXX NAMES g++ clang++ NO_CACHE)
+        if(JAQR_DEFAULT_CXX)
+            set(CMAKE_CXX_COMPILER "${JAQR_DEFAULT_CXX}" CACHE FILEPATH "C++ compiler")
+        endif()
+    endif()
+endif()
+
 project(jaqr LANGUAGES CXX)
 
 file(GLOB_RECURSE JAQR_SOURCES CONFIGURE_DEPENDS
