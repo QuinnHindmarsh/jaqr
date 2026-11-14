@@ -33,7 +33,7 @@ These additional tools are only needed for development:
 ### 1. Get the source and build
 
 ```sh
-git clone https://github.com/JS-Duggan/jaqr.git
+git clone https://github.com/QuinnHindmarsh/jaqr.git
 cd jaqr
 cmake --preset debug -DBUILD_TESTING=OFF
 cmake --build --preset debug
